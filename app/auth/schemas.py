@@ -7,6 +7,11 @@ class UserLogin(BaseModel):
     email: str
     password: str
 
+#Modelo para el SSOlogin - Agrofusion
+class SSOLoginRequest(BaseModel):
+    sso_token: str
+
+
 # Modelo de respuesta con el token
 class Token(BaseModel):
     access_token: str
