@@ -5,7 +5,7 @@ from datetime import datetime
 from jose import jwt, JWTError
 from app.database import get_db
 from app.auth.services import AuthService, SECRET_KEY, OAuthService
-from app.auth.schemas import ResetPasswordRequest, ResetPasswordResponse, UpdatePasswordRequest, OAuthLoginRequest, OAuthCallbackRequest, SocialLoginResponse
+from app.auth.schemas import ResetPasswordRequest, ResetPasswordResponse, UpdatePasswordRequest, OAuthLoginRequest, OAuthCallbackRequest, SocialLoginResponse, SSOLoginRequest
 from app.users.schemas import UserLogin, Token
 from app.users.services import UserService
 from app.roles.models import Role, Permission 
@@ -111,6 +111,11 @@ def login(user_credentials: UserLogin, db: Session = Depends(get_db)):
     
     access_token = auth_service.create_access_token(data=token_data)
     return {"access_token": access_token, "token_type": "bearer"}
+
+@router.post("/sso-login", response_model=Token)
+def sso_login(request: SSOLoginRequest, db: Session = Depends(get_db)):
+    auth_service = AuthService(db)
+    return auth_service.sso_login(request.sso_token)
 
 
 @router.post("/logout")
