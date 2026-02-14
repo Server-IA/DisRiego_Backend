@@ -11,6 +11,15 @@ class UserLogin(BaseModel):
 class SSOLoginRequest(BaseModel):
     sso_token: str
 
+#Modelo request de token para servicios externos
+class ServiceTokenRequest(BaseModel):
+    client_id: str
+    client_secret: str
+    email:str
+#Modelo de respuesta para token de servicios externos
+class ServiceTokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 # Modelo de respuesta con el token
 class Token(BaseModel):

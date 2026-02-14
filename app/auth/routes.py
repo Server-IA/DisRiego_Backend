@@ -5,7 +5,7 @@ from datetime import datetime
 from jose import jwt, JWTError
 from app.database import get_db
 from app.auth.services import AuthService, SECRET_KEY, OAuthService
-from app.auth.schemas import ResetPasswordRequest, ResetPasswordResponse, UpdatePasswordRequest, OAuthLoginRequest, OAuthCallbackRequest, SocialLoginResponse, SSOLoginRequest
+from app.auth.schemas import ResetPasswordRequest, ResetPasswordResponse, ServiceTokenRequest, ServiceTokenResponse, UpdatePasswordRequest, OAuthLoginRequest, OAuthCallbackRequest, SocialLoginResponse, SSOLoginRequest
 from app.users.schemas import UserLogin, Token
 from app.users.services import UserService
 from app.roles.models import Role, Permission 
@@ -211,3 +211,51 @@ async def oauth_callback(request: OAuthCallbackRequest, db: Session = Depends(ge
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al procesar callback de {request.provider}: {str(e)}"
         )
+
+@router.post("/service-token", response_model=ServiceTokenResponse)
+def service_token(
+    payload: ServiceTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Genera un token JWT para autenticación de servicios (machine-to-machine).
+
+    Flujo:
+    1. Valida las credenciales del servicio (client_id y client_secret)
+       contra las variables de entorno del sistema.
+    2. Si son válidas, genera un token JWT asociado al usuario indicado por email.
+    3. Retorna el access_token en formato Bearer.
+
+    Args:
+        payload (ServiceTokenRequest):
+            Datos enviados por el cliente que solicita el token:
+                - client_id
+                - client_secret
+                - email del usuario a representar
+        db (Session):
+            Sesión de base de datos inyectada por FastAPI.
+
+    Returns:
+        ServiceTokenResponse:
+            {
+                "access_token": "<jwt>",
+                "token_type": "bearer"
+            }
+
+    Raises:
+        HTTPException 401:
+            Si las credenciales del servicio son inválidas.
+    """
+
+    auth_service = AuthService(None)
+
+    service = auth_service.authenticate_service(
+        payload.client_id,
+        payload.client_secret
+    )
+    if not service:
+        raise HTTPException(status_code=401, detail="Credenciales de servicio inválidas")
+
+    token = auth_service.create_service_token(db, email=payload.email)
+
+    return token

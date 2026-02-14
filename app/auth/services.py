@@ -10,6 +10,9 @@ from app.roles.models import Role, Permission
 from Crypto.Protocol.KDF import scrypt
 import os
 from pathlib import Path
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security = HTTPBearer()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SSO_PUBLIC_KEY_PATH = BASE_DIR / "keys" / "sso_public.pem"
@@ -28,13 +31,13 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
+
 class AuthService:
     """Clase para la gestión de autenticación"""
 
     def __init__(self, db: Session):
         self.db = db
 
-    
     def sso_login(self, sso_token: str):
         """
         Autentica un usuario mediante Single Sign-On (SSO).
@@ -63,19 +66,18 @@ class AuthService:
             HTTPException(401):
                 Si el token es inválido, está expirado o no cumple con los claims esperados.
         """
-        
+
         try:
             payload = jwt.decode(
                 sso_token,
                 SSO_PUBLIC_KEY,
                 algorithms=["RS256"],
                 audience="DISRIEGO",
-                issuer="agrofusion-auth"
+                issuer="agrofusion-auth",
             )
         except JWTError:
             raise HTTPException(status_code=401, detail="SSO token inválido")
 
-        
         email = payload["email"]
 
         user = (
@@ -101,12 +103,11 @@ class AuthService:
             "rol": roles,
             "status": user.status_id,
             "birthday": user.birthday.isoformat() if user.birthday else None,
-            "first_login_complete": user.first_login_complete
+            "first_login_complete": user.first_login_complete,
         }
 
         access_token = self.create_access_token(token_data)
         return {"access_token": access_token, "token_type": "bearer"}
-    
 
     def create_access_token(self, data: dict, expires_delta: timedelta = None) -> str:
         """
@@ -117,12 +118,18 @@ class AuthService:
         """
         try:
             to_encode = data.copy()
-            expire = datetime.utcnow() + (expires_delta if expires_delta else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+            expire = datetime.utcnow() + (
+                expires_delta
+                if expires_delta
+                else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            )
             to_encode.update({"exp": expire})
             encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
             return encoded_jwt
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al crear el token: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error al crear el token: {str(e)}"
+            )
 
     def revoke_token(self, db: Session, token: str, expires_at: datetime):
         """
@@ -139,8 +146,9 @@ class AuthService:
             return {"success": True, "data": "Token revocado correctamente"}
         except Exception as e:
             db.rollback()
-            raise HTTPException(status_code=500, detail=f"Error al revocar el token: {str(e)}")
-
+            raise HTTPException(
+                status_code=500, detail=f"Error al revocar el token: {str(e)}"
+            )
 
     def sso_login(self, sso_token: str):
         """
@@ -170,19 +178,18 @@ class AuthService:
             HTTPException(401):
                 Si el token es inválido, está expirado o no cumple con los claims esperados.
         """
-        
+
         try:
             payload = jwt.decode(
                 sso_token,
                 SSO_PUBLIC_KEY,
                 algorithms=["RS256"],
                 audience="DISRIEGO",
-                issuer="agrofusion-auth"
+                issuer="agrofusion-auth",
             )
         except JWTError:
             raise HTTPException(status_code=401, detail="SSO token inválido")
 
-        
         email = payload["email"]
 
         user = (
@@ -191,8 +198,6 @@ class AuthService:
             .filter(User.email == email)
             .first()
         )
-
-       
 
         roles = []
         for role in user.roles:
@@ -210,14 +215,120 @@ class AuthService:
             "rol": roles,
             "status": user.status_id,
             "birthday": user.birthday.isoformat() if user.birthday else None,
-            "first_login_complete": user.first_login_complete
+            "first_login_complete": user.first_login_complete,
         }
 
         access_token = self.create_access_token(token_data)
         return {"access_token": access_token, "token_type": "bearer"}
-    
 
-    def verify_password(self, stored_salt: str, stored_hash: str, password: str) -> bool:
+    def authenticate_service(self, client_id: str, client_secret: str):
+        """
+        Valida las credenciales de un cliente de servicio.
+
+        Este método compara el client_id y client_secret recibidos
+        contra los valores configurados en variables de entorno.
+
+        Variables requeridas:
+            SERVICE_CLIENT_ID
+            SERVICE_CLIENT_SECRET
+            SERVICE_CLIENT_SCOPES (opcional, separados por coma)
+
+        Args:
+            client_id (str): Identificador del cliente de servicio.
+            client_secret (str): Secreto del cliente de servicio.
+
+        Returns:
+            dict:
+                Información del cliente autenticado:
+                {
+                    "client_id": str,
+                    "scopes": list[str]
+                }
+
+        Raises:
+            HTTPException 500:
+                Si las variables de entorno no están configuradas.
+
+            HTTPException 401:
+                Si las credenciales son inválidas.
+        """
+        expected_id = os.getenv("SERVICE_CLIENT_ID")
+        expected_secret = os.getenv("SERVICE_CLIENT_SECRET")
+
+        if not expected_id or not expected_secret:
+            raise HTTPException(status_code=500, detail="Service auth no configurado")
+
+        if client_id != expected_id or client_secret != expected_secret:
+            raise HTTPException(
+                status_code=401, detail="Credenciales de servicio inválidas"
+            )
+
+        scopes = os.getenv("SERVICE_CLIENT_SCOPES", "")
+        return {"client_id": client_id, "scopes": scopes.split(",") if scopes else []}
+
+    from datetime import timedelta
+
+    def create_service_token(self, db: Session, email: str):
+        """
+        Genera un JWT de servicio asociado a un usuario del sistema.
+
+        Este token incluye:
+            - Identidad del usuario
+            - Roles
+            - Permisos
+            - Estado del usuario
+            - Fecha de expiración
+
+        Args:
+            db (Session): Sesión activa de base de datos.
+            email (str): Email del usuario que será representado en el token.
+
+        Returns:
+            dict:
+                {
+                    "access_token": str,
+                    "token_type": "bearer"
+                }
+
+        Raises:
+            HTTPException 404:
+                Si el usuario no existe.
+
+            HTTPException 500:
+                Si ocurre un error generando el token.
+        """
+        user = (
+            db.query(User)
+            .options(joinedload(User.roles).joinedload(Role.permissions))
+            .filter(User.email == email)
+            .first()
+        )
+
+        roles = []
+        for role in user.roles:
+            role_data = {"id": role.id, "name": role.name}
+            permisos = [{"id": p.id, "name": p.name} for p in role.permissions]
+            role_data["permisos"] = permisos
+            roles.append(role_data)
+
+        token_data = {
+            "sub": user.email,
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "status_date": datetime.utcnow().isoformat(),
+            "rol": roles,
+            "status": user.status_id,
+            "birthday": user.birthday.isoformat() if user.birthday else None,
+            "first_login_complete": user.first_login_complete,
+        }
+
+        access_token = self.create_access_token(token_data)
+        return {"access_token": access_token, "token_type": "bearer"}
+
+    def verify_password(
+        self, stored_salt: str, stored_hash: str, password: str
+    ) -> bool:
         """
         Verificar si la contraseña proporcionada coincide con el hash almacenado
         :param stored_salt: El salt almacenado en la base de datos
@@ -229,7 +340,9 @@ class AuthService:
             calculated_hash = self.hash_password(password, stored_salt)
             return calculated_hash == stored_hash
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al verificar la contraseña: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error al verificar la contraseña: {str(e)}"
+            )
 
     def hash_password(self, password: str, salt: str) -> str:
         """
@@ -240,11 +353,16 @@ class AuthService:
         """
         try:
             salt_bytes = bytes.fromhex(salt)
-            key = scrypt(password.encode(), salt=salt_bytes, key_len=32, N=2**14, r=8, p=1)
+            key = scrypt(
+                password.encode(), salt=salt_bytes, key_len=32, N=2**14, r=8, p=1
+            )
             return key.hex()
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al generar el hash de la contraseña: {str(e)}")
-    
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al generar el hash de la contraseña: {str(e)}",
+            )
+
     def get_user_by_username(self, username: str):
         try:
             user = (
@@ -257,7 +375,9 @@ class AuthService:
                 raise HTTPException(status_code=404, detail="Usuario no encontrado.")
             return user
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al obtener el usuario: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error al obtener el usuario: {str(e)}"
+            )
 
     def hash_password(self, password: str) -> tuple:
         try:
@@ -265,39 +385,59 @@ class AuthService:
             key = scrypt(password.encode(), salt, key_len=32, N=2**14, r=8, p=1)
             return salt.hex(), key.hex()
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al generar el hash de la contraseña: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error al generar el hash de la contraseña: {str(e)}",
+            )
 
-    def verify_password(self, stored_salt: str, stored_hash: str, password: str) -> bool:
+    def verify_password(
+        self, stored_salt: str, stored_hash: str, password: str
+    ) -> bool:
         try:
             bytes.fromhex(stored_salt)
         except ValueError:
-            raise HTTPException(status_code=400, detail="El salt almacenado no es una cadena hexadecimal válida.")
-        
+            raise HTTPException(
+                status_code=400,
+                detail="El salt almacenado no es una cadena hexadecimal válida.",
+            )
+
         try:
             salt = bytes.fromhex(stored_salt)
             key = scrypt(password.encode(), salt, key_len=32, N=2**14, r=8, p=1)
             return key.hex() == stored_hash
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al verificar la contraseña: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error al verificar la contraseña: {str(e)}"
+            )
 
     def authenticate_user(self, email: str, password: str):
         try:
             user = self.get_user_by_username(email)
-            if not user or not self.verify_password(user.password_salt, user.password, password):
+            if not user or not self.verify_password(
+                user.password_salt, user.password, password
+            ):
                 raise HTTPException(status_code=401, detail="Credenciales inválidas")
             return user
         except Exception as e:
-            raise HTTPException(status_code=401, detail=f"Error al autenticar al usuario: {str(e)}")
+            raise HTTPException(
+                status_code=401, detail=f"Error al autenticar al usuario: {str(e)}"
+            )
 
     def create_access_token(self, data: dict, expires_delta: timedelta = None):
         try:
             to_encode = data.copy()
-            expire = datetime.utcnow() + (expires_delta if expires_delta else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+            expire = datetime.utcnow() + (
+                expires_delta
+                if expires_delta
+                else timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            )
             to_encode.update({"exp": expire})
             encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
             return encoded_jwt
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al crear el token: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Error al crear el token: {str(e)}"
+            )
 
     def get_current_user(token: str = Depends(oauth2_scheme)) -> dict:
         """
@@ -313,6 +453,7 @@ class AuthService:
                 detail="Credenciales inválidas",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
 
 class OAuthService:
     """Servicio para gestionar la autenticación con proveedores OAuth"""
@@ -365,7 +506,9 @@ class OAuthService:
         )
         return {"auth_url": auth_uri, "state": state}
 
-    async def process_oauth_callback(self, provider: str, code: str) -> SocialLoginResponse:
+    async def process_oauth_callback(
+        self, provider: str, code: str
+    ) -> SocialLoginResponse:
         """
         Procesa el callback de autenticación OAuth
         """
@@ -375,13 +518,19 @@ class OAuthService:
             elif provider == "microsoft":
                 user_info = await self._get_microsoft_user_info(code)
             else:
-                return SocialLoginResponse(success=False, message=f"Proveedor no soportado: {provider}")
+                return SocialLoginResponse(
+                    success=False, message=f"Proveedor no soportado: {provider}"
+                )
 
             # Verificar si ya existe una cuenta social asociada
-            social_account = self.db.query(SocialAccount).filter(
-                SocialAccount.provider == provider,
-                SocialAccount.provider_user_id == user_info.provider_user_id
-            ).first()
+            social_account = (
+                self.db.query(SocialAccount)
+                .filter(
+                    SocialAccount.provider == provider,
+                    SocialAccount.provider_user_id == user_info.provider_user_id,
+                )
+                .first()
+            )
 
             is_new_user = False
 
@@ -394,9 +543,9 @@ class OAuthService:
                 if not user:
                     user = User(
                         email=user_info.email,
-                        name=user_info.name or user_info.email.split('@')[0],
+                        name=user_info.name or user_info.email.split("@")[0],
                         is_active=True,
-                        status_id=1
+                        status_id=1,
                     )
                     self.db.add(user)
                     self.db.flush()
@@ -406,7 +555,7 @@ class OAuthService:
                     user_id=user.id,
                     provider=provider,
                     provider_user_id=user_info.provider_user_id,
-                    email=user_info.email
+                    email=user_info.email,
                 )
                 self.db.add(social_account)
 
@@ -418,7 +567,8 @@ class OAuthService:
                 "id": user.id,
                 "name": user.name,
                 "email": user.email,
-                "exp": datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
+                "exp": datetime.utcnow()
+                + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES),
             }
             access_token = jwt.encode(token_data, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -428,12 +578,14 @@ class OAuthService:
                 access_token=access_token,
                 token_type="bearer",
                 user_info={"id": user.id, "email": user.email, "name": user.name},
-                is_new_user=is_new_user
+                is_new_user=is_new_user,
             )
 
         except Exception as e:
             self.db.rollback()
-            return SocialLoginResponse(success=False, message=f"Error en la autenticación: {str(e)}")
+            return SocialLoginResponse(
+                success=False, message=f"Error en la autenticación: {str(e)}"
+            )
 
     async def _get_google_user_info(self, code: str) -> OAuthUserInfo:
         """Obtiene información del usuario de Google"""
@@ -443,7 +595,7 @@ class OAuthService:
             "client_id": self.google_client_id,
             "client_secret": self.google_client_secret,
             "redirect_uri": self.google_redirect_uri,
-            "grant_type": "authorization_code"
+            "grant_type": "authorization_code",
         }
         token_response = requests.post(token_url, data=token_payload)
         token_data = token_response.json()
@@ -462,7 +614,7 @@ class OAuthService:
             provider_user_id=userinfo["sub"],
             email=userinfo["email"],
             name=userinfo.get("name"),
-            picture=userinfo.get("picture")
+            picture=userinfo.get("picture"),
         )
 
     async def _get_microsoft_user_info(self, code: str) -> OAuthUserInfo:
@@ -473,13 +625,15 @@ class OAuthService:
             "client_id": self.microsoft_client_id,
             "client_secret": self.microsoft_client_secret,
             "redirect_uri": self.microsoft_redirect_uri,
-            "grant_type": "authorization_code"
+            "grant_type": "authorization_code",
         }
         token_response = requests.post(token_url, data=token_payload)
         token_data = token_response.json()
 
         if "error" in token_data:
-            raise ValueError(f"Error al obtener token de Microsoft: {token_data['error']}")
+            raise ValueError(
+                f"Error al obtener token de Microsoft: {token_data['error']}"
+            )
 
         access_token = token_data["access_token"]
         userinfo_url = "https://graph.microsoft.com/v1.0/me"
@@ -492,6 +646,5 @@ class OAuthService:
             provider_user_id=userinfo["id"],
             email=userinfo["userPrincipalName"],
             name=userinfo.get("displayName"),
-            picture=None
+            picture=None,
         )
-
