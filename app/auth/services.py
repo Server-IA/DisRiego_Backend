@@ -10,9 +10,6 @@ from app.roles.models import Role, Permission
 from Crypto.Protocol.KDF import scrypt
 import os
 from pathlib import Path
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
-security = HTTPBearer()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 SSO_PUBLIC_KEY_PATH = BASE_DIR / "keys" / "sso_public.pem"
